@@ -44,8 +44,8 @@ It accomplishes this by harnessing **Discrete Event Simulation (DES)** telemetry
 
 **1. Clone the repository:**
 ```bash
-git clone https://github.com/Dharma-18/CIP_WEB.git
-cd CIP_WEB
+git clone https://github.com/Dharma-18/O-RAN-IDS-Dashboard.git
+cd O-RAN-IDS-Dashboard
 ```
 
 **2. Install runtime dependencies:**
@@ -76,3 +76,10 @@ On highly synthetic DES traces aggregating `15` xApps testing millions of locali
 - **Detection Accuracy**: ~94%+
 - **F1 Validation**: ~87%+
 - **Precision Thresholding**: ~96%+
+
+---
+
+## 📜 License & Contribution
+This project is open-source and free to distribute. If you'd like to contribute, please fork the repository and issue a Pull Request containing a thorough explanation of your mathematical changes or UI enhancements.
+
+**Developed with ❤️ and Next-Gen Cyber-Intelligence.**
