@@ -1,5 +1,5 @@
 # ==============================================================================
-# Graph Builder — Global Graph + Ego Graph Construction (Vectorized)
+# Graph Builder — Global Graph + Ego Graph Construction
 # ==============================================================================
 import numpy as np
 import pandas as pd
@@ -63,67 +63,62 @@ class GlobalGraphBuilder:
 
     # ------------------------------------------------------------------
     def _build_single(self, df_t: pd.DataFrame, timestamp: int) -> Data:
-        X, C, U = self.num_xapps, self.num_cells, self.num_ues
         x = np.zeros((self.total_nodes, 12), dtype=np.float32)
 
-        # ---- One-hot type encoding (vectorized) ----
-        x[:X, 0] = 1.0          # xApps
-        x[X:X+C, 1] = 1.0       # Cells
-        x[X+C:X+C+U, 2] = 1.0   # UEs
-
-        # ---- xApp features (vectorized) ----
+        # ---- xApp nodes ----
         xapp_data = df_t.drop_duplicates('xapp_id').set_index('xapp_id')
-        present_xapps = xapp_data.index.intersection(range(X))
-        if len(present_xapps) > 0:
-            feats = xapp_data.loc[present_xapps, ['cpu_usage', 'memory_usage', 'rmr_msg_rate', 'prb_usage_dl']].values
-            x[present_xapps, 3:7] = self.scaler_xapp.transform(feats)
+        for xid in range(self.num_xapps):
+            idx     = xid
+            x[idx, 0] = 1.0  # is_xapp
+            if xid in xapp_data.index:
+                feats    = xapp_data.loc[xid, ['cpu_usage', 'memory_usage', 'rmr_msg_rate', 'prb_usage_dl']].values.reshape(1, -1)
+                x[idx, 3:7] = self.scaler_xapp.transform(feats)
 
-        # ---- Cell features (vectorized) ----
+        # ---- Cell nodes ----
         cell_data = df_t.drop_duplicates('target_cell').set_index('target_cell')
-        present_cells = cell_data.index.intersection(range(C))
-        if len(present_cells) > 0:
-            feats = cell_data.loc[present_cells, ['cell_load', 'ue_count']].values
-            cell_indices = np.array(present_cells) + X
-            x[cell_indices, 7:9] = self.scaler_cell.transform(feats)
+        for cid in range(self.num_cells):
+            idx     = self.num_xapps + cid
+            x[idx, 1] = 1.0  # is_cell
+            if cid in cell_data.index:
+                feats    = cell_data.loc[cid, ['cell_load', 'ue_count']].values.reshape(1, -1)
+                x[idx, 7:9] = self.scaler_cell.transform(feats)
 
-        # ---- UE features (vectorized) ----
+        # ---- UE nodes ----
         ue_data = df_t.drop_duplicates('target_ue').set_index('target_ue')
-        present_ues = ue_data.index.intersection(range(U))
-        if len(present_ues) > 0:
-            feats = ue_data.loc[present_ues, ['rsrp', 'sinr', 'throughput']].values
-            ue_indices = np.array(present_ues) + X + C
-            x[ue_indices, 9:12] = self.scaler_ue.transform(feats)
+        for uid in range(self.num_ues):
+            idx     = self.num_xapps + self.num_cells + uid
+            x[idx, 2] = 1.0  # is_ue
+            if uid in ue_data.index:
+                feats    = ue_data.loc[uid, ['rsrp', 'sinr', 'throughput']].values.reshape(1, -1)
+                x[idx, 9:12] = self.scaler_ue.transform(feats)
 
-        # ---- Edges (vectorized) ----
-        # xApp <-> UE
+        # ---- Edges ----
+        src, dst = [], []
+
+        # xApp <-> UE (deduplicated)
         pairs = df_t[['xapp_id', 'target_ue']].drop_duplicates()
-        u_xapp = pairs['xapp_id'].values.astype(int)
-        v_ue   = (X + C + pairs['target_ue'].values).astype(int)
-        
+        for _, row in pairs.iterrows():
+            u = int(row['xapp_id'])
+            v = self.num_xapps + self.num_cells + int(row['target_ue'])
+            src += [u, v]; dst += [v, u]
+
         # UE <-> Cell
-        if len(present_ues) > 0:
-            ue_ids_arr   = np.array(present_ues, dtype=int)
-            cell_ids_arr = ue_data.loc[present_ues, 'target_cell'].values.astype(int)
-            u_ue_cell    = X + C + ue_ids_arr
-            v_cell       = X + cell_ids_arr
-        else:
-            u_ue_cell = np.array([], dtype=int)
-            v_cell    = np.array([], dtype=int)
+        for uid, row in ue_data.iterrows():
+            u = self.num_xapps + self.num_cells + int(uid)
+            c = self.num_xapps + int(row['target_cell'])
+            src += [u, c]; dst += [c, u]
 
-        # Stack all edges (bidirectional)
-        src = np.concatenate([u_xapp, v_ue,  u_ue_cell, v_cell])
-        dst = np.concatenate([v_ue,  u_xapp, v_cell,    u_ue_cell])
-
-        # ---- Node-level labels (vectorized) ----
+        # ---- Node-level labels ----
         y = torch.full((self.total_nodes,), -1, dtype=torch.long)
-        y[:X] = 0  # default benign
-        if len(present_xapps) > 0:
-            mal_series = xapp_data.loc[present_xapps, 'is_malicious']
-            y[np.array(present_xapps)] = torch.tensor(mal_series.values.astype(int), dtype=torch.long)
+        for xid in range(self.num_xapps):
+            if xid in xapp_data.index:
+                y[xid] = int(xapp_data.loc[xid, 'is_malicious'])
+            else:
+                y[xid] = 0
 
         return Data(
             x          = torch.tensor(x, dtype=torch.float),
-            edge_index = torch.tensor(np.stack([src, dst]), dtype=torch.long) if len(src) > 0 else torch.zeros((2, 0), dtype=torch.long),
+            edge_index = torch.tensor([src, dst], dtype=torch.long),
             y          = y,
             timestamp  = timestamp,
         )
